@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,6 +39,15 @@ type SysInfo struct {
 	LANTxBps uint64
 	WANRxBps uint64
 	WANTxBps uint64
+
+	PowerW    float64 // signed battery power: >0 charging, <0 discharging (W)
+	RemainSec int64   // estimated remaining seconds while discharging
+	WANUp     bool    // WAN link up
+	WANHasIP  bool    // WAN has a default route
+	LANUp     bool
+	WifiBoard int // board WiFi station count (0 when no radio)
+	WifiPcie  int // PCIe WiFi station count
+	SN        string
 }
 
 // Sensor samples sysfs/procfs and keeps previous values for rates and percentages.
@@ -205,6 +217,24 @@ func readNetDev() map[string][2]uint64 {
 	return m
 }
 
+// cellularIface returns the network interface that carries cellular
+// traffic (qmodem creates wwan*/qmi*/rmnet* when a modem is up), or "" when
+// no cellular interface exists. The 5G usage counters must never fall back to
+// eth0: that is the home WAN link, not cellular traffic.
+func cellularIface() string {
+	entries, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if strings.HasPrefix(n, "wwan") || strings.HasPrefix(n, "qmi") || strings.HasPrefix(n, "rmnet") {
+			return n
+		}
+	}
+	return ""
+}
+
 func readOSVersion() string {
 	b, err := os.ReadFile("/etc/openwrt_release")
 	if err != nil {
@@ -262,11 +292,100 @@ func (s *Sensor) Sample() SysInfo {
 				}
 				return uint64(float64(drx) / dt), uint64(float64(dtx) / dt)
 			}
-			si.LANRxBps, si.LANTxBps = rate("eth1")
+			si.LANRxBps, si.LANTxBps = rate("br-lan")
 			si.WANRxBps, si.WANTxBps = rate("eth0")
 		}
 	}
 	s.prevNet = net
 	s.prevTime = time.Now()
+
+	// Power / remaining time (battery power_now is in microwatts).
+	if pw := readFirstFloat("/sys/class/power_supply/battery/power_now"); pw != 0 {
+		si.PowerW = pw / 1e6
+	} else {
+		si.PowerW = float64(si.BatteryMV) * float64(si.BatteryMA) / 1e3
+	}
+	if !si.ChargerOnline && si.PowerW < -0.2 && si.BatteryPct > 0 {
+		const energyFullWh = 51.8
+		si.RemainSec = int64(energyFullWh * float64(si.BatteryPct) / 100.0 / -si.PowerW * 3600)
+	}
+
+	// Link state: eth0 = WAN, br-lan = LAN.
+	si.WANUp = readOperstate("eth0") == "up"
+	si.LANUp = readOperstate("br-lan") == "up"
+	si.WANHasIP = defaultRouteVia("eth0")
+
+	// WiFi station counts (empty when the board has no radio/driver).
+	si.WifiBoard = wifiStationCount("wlan0")
+	si.WifiPcie = wifiStationCount("wlan1")
+
+	si.SN = readSN()
 	return si
+}
+
+func readOperstate(name string) string {
+	return readFileTrim("/sys/class/net/" + name + "/operstate")
+}
+
+func defaultRouteVia(ifname string) bool {
+	b, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == ifname && f[1] == "00000000" {
+			return true
+		}
+	}
+	return false
+}
+
+// wifiStationCount counts associated stations via `iw` (busybox/system might
+// lack the tool; any failure yields 0).
+func wifiStationCount(ifname string) int {
+	if _, err := os.Stat("/sys/class/net/" + ifname); err != nil {
+		return 0
+	}
+	out, err := exec.Command("iw", "dev", ifname, "station", "dump").Output()
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(out), "Station ")
+}
+
+// readSN reads the Photonicat2 serial number from the eMMC boot partition
+// (the stock firmware stores it there; format is a printable ASCII string).
+func readSN() string {
+	f, err := os.Open("/dev/mmcblk0boot1")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 10000)
+	n, _ := f.Read(buf)
+	buf = buf[:n]
+	// The stock firmware stores a JSON blob in the eMMC boot1 partition.
+	// It is UTF-16LE, so drop the interleaved NUL bytes before parsing.
+	if n > 2 && buf[1] == 0 {
+		nb := make([]byte, 0, n/2)
+		for i := 0; i+1 < n; i += 2 {
+			if buf[i] != 0 {
+				nb = append(nb, buf[i])
+			}
+		}
+		buf = nb
+	} else if idx := bytes.IndexByte(buf, 0); idx >= 0 {
+		buf = buf[:idx]
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(buf, &payload); err != nil {
+		return ""
+	}
+	for _, k := range []string{"sn", "machine_sn"} {
+		if v, ok := payload[k].(string); ok && v != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

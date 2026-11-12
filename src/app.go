@@ -44,6 +44,24 @@ type App struct {
 	chargeActual  int
 	fanCooling    int
 
+	subpage int
+	devices []Device
+	usage   *UsageStore
+
+	powerHist [60]float64
+	powerIdx  int
+	wanHist   [30]uint64
+	wanIdx    int
+
+	modemOnline bool
+	modemModule string
+	modemCarrier string
+	modemIP     string
+	modemDNSms  int
+	modemRAT    string
+	modemRxBps  float64
+	modemTxBps  float64
+
 	stop chan struct{}
 }
 
@@ -55,6 +73,7 @@ func NewApp(disp *Display, socket string, noApply bool) *App {
 		socket:  socket,
 		noApply: noApply,
 		cfg:     LoadConfig(),
+		usage:   NewUsageStore(),
 		stop:    make(chan struct{}),
 	}
 	if kr, err := OpenPWRKey(true); err != nil {
@@ -100,7 +119,8 @@ func (a *App) Run() error {
 			a.tick()
 		case <-a.stop:
 			a.disp.SetBrightnessPct(0)
-			log.Printf("pcat2d: stopped")
+			a.usage.FlushNow()
+			log.Printf("pcat2d: stopped (usage flushed)")
 			return nil
 		}
 	}
@@ -141,6 +161,24 @@ func (a *App) applyDeviceConfigOnStart() {
 
 func (a *App) tick() {
 	info := a.sensor.Sample()
+
+	// History / usage / device data (kept fresh even while the screen is off).
+	if iface := cellularIface(); iface != "" {
+		rx, tx := readIfaceCounters(iface)
+		a.usage.Update(time.Now(), rx, tx)
+	}
+	pw := info.PowerW
+	if pw < 0 {
+		pw = -pw
+	}
+	if pw > 40 {
+		pw = 40
+	}
+	a.powerHist[a.powerIdx%60] = pw
+	a.powerIdx++
+	a.wanHist[a.wanIdx%30] = info.LANRxBps
+	a.wanIdx++
+	a.devices = loadDevices()
 
 	a.mu.Lock()
 	a.info = info
@@ -212,8 +250,16 @@ func (a *App) onKey() {
 // scan-out and the transition has no full-frame tearing.
 func (a *App) nextPage() {
 	a.mu.Lock()
-	to := (a.page + 1) % pageCount
-	a.page = to
+	to := a.page
+	if a.page == pageCount-1 && a.subpage+1 < a.devPages() {
+		a.subpage++
+	} else {
+		to = (a.page + 1) % pageCount
+		a.page = to
+		if to == pageCount-1 {
+			a.subpage = 0
+		}
+	}
 	info := a.info
 	a.mu.Unlock()
 
@@ -275,7 +321,10 @@ func (a *App) status() statusOut {
 	cfg := a.cfg
 	awake, page, brightness := a.awake, a.page, a.brightness
 	keyPresses, mcuErr, chargeActual, fanCooling := a.keyPresses, a.mcuErr, a.chargeActual, a.fanCooling
+	subpage := a.subpage
 	a.mu.Unlock()
+	usedDay := int(a.usage.DayBytes() / 1000000)
+	usedMonth := int(a.usage.MonthBytes() / 1000000)
 
 	return statusOut{
 		Awake:         awake,
@@ -311,6 +360,10 @@ func (a *App) status() statusOut {
 		DimChargerSec: cfg.DimChargerSec,
 		Movement:      cfg.Movement,
 		MCUErr:        mcuErr,
+		Subpage:       subpage,
+		MonthlyLimitGB: cfg.MonthlyLimitGB,
+		UsedDayMB:     usedDay,
+		UsedMonthMB:   usedMonth,
 	}
 }
 
@@ -439,6 +492,7 @@ type setReq struct {
 	DimBatterySec *int    `json:"dim_battery_sec"`
 	DimChargerSec *int    `json:"dim_charger_sec"`
 	Movement      *bool   `json:"movement"`
+	MonthlyLimitGB *int   `json:"monthly_limit_gb"`
 }
 
 // unwrapData accepts both a flat object and the {"data": {...}} wrapper that
@@ -529,6 +583,12 @@ func (a *App) handleSet(raw string) ctlResponse {
 	}
 	if p.Movement != nil {
 		cfg.Movement = *p.Movement
+	}
+	if p.MonthlyLimitGB != nil {
+		if *p.MonthlyLimitGB < 1 || *p.MonthlyLimitGB > 9999 {
+			return ctlResponse{OK: false, Err: "monthly_limit_gb must be 1..9999"}
+		}
+		cfg.MonthlyLimitGB = *p.MonthlyLimitGB
 	}
 	if p.LEDMode != nil {
 		cfg.LED.Mode = *p.LEDMode

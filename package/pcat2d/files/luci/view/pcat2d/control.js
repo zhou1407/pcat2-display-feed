@@ -30,7 +30,8 @@ var DEFAULT = {
 	brightness: 50,
 	dim_battery_sec: 60,
 	dim_charger_sec: 300,
-	movement: true
+	movement: true,
+	monthly_limit_gb: 9999
 };
 
 var state = null;
@@ -53,6 +54,12 @@ var CSS = '.pcat2d-page{max-width:920px}' +
 function text(id, value) {
 	if (statusRefs[id])
 		statusRefs[id].textContent = value;
+}
+
+function usageSpan() {
+	var v = E('span', { 'class': 'v' }, [ '-' ]);
+	statusRefs['5G 用量'] = v;
+	return v;
 }
 
 function cell(title) {
@@ -121,6 +128,13 @@ function numberInput(value, min, max, onchange) {
 	});
 }
 
+function fmtMB(mb) {
+	mb = mb || 0;
+	if (mb >= 1024)
+		return (mb / 1024).toFixed(1) + ' GB';
+	return mb.toFixed(0) + ' MB';
+}
+
 function applyStatus(s) {
 	if (!s)
 		return;
@@ -135,6 +149,8 @@ function applyStatus(s) {
 	text('充电器', s.charger_online ? '已连接' : '未连接');
 	text('屏幕', s.awake ? ('点亮 · 亮度 ' + s.brightness + '%') : '息屏');
 	text('pcat2d 服务', '运行中' + (s.mcu_err ? ' · MCU 警告' : ''));
+	text('5G 用量', fmtMB(s.used_day_mb) + ' / ' + fmtMB(s.used_month_mb) +
+		' · 上限 ' + (s.monthly_limit_gb || 9999) + ' GB');
 }
 
 function buildSections(rebuild) {
@@ -181,6 +197,12 @@ function buildSections(rebuild) {
 		]),
 
 		E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, [ '5G 流量统计' ]),
+			row('每月流量上限（GB）', numberInput(state.monthly_limit_gb || 9999, 1, 9999, function(v) { state.monthly_limit_gb = v; })),
+			row('当前用量', usageSpan())
+		]),
+
+		E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, [ '电源 LED' ]),
 			row('模式', sel([ [ 'off', '关闭' ], [ 'on', '常亮' ], [ 'timed', '定时' ] ], state.led_mode,
 				function(v) { state.led_mode = v; })),
@@ -219,6 +241,7 @@ function buildSections(rebuild) {
 					state.dim_battery_sec = DEFAULT.dim_battery_sec;
 					state.dim_charger_sec = DEFAULT.dim_charger_sec;
 					state.movement = DEFAULT.movement;
+					state.monthly_limit_gb = DEFAULT.monthly_limit_gb;
 					if (rebuild)
 						rebuild();
 					ui.addNotification(null, E('p', {}, [ '已填入默认值，点「保存并应用」生效。' ]));
@@ -240,7 +263,8 @@ function buildSections(rebuild) {
 						brightness: parseInt(state.brightness, 10) || 0,
 						dim_battery_sec: parseInt(state.dim_battery_sec, 10) || 0,
 						dim_charger_sec: parseInt(state.dim_charger_sec, 10) || 0,
-						movement: !!state.movement
+						movement: !!state.movement,
+						monthly_limit_gb: parseInt(state.monthly_limit_gb, 10) || 9999
 					};
 					callSet(payload).then(function(res) {
 						if (res && res.status) {

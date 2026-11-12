@@ -76,12 +76,18 @@ func (im *Image) Border(x, y, w, h int, c uint16) {
 	im.VLine(x+w-1, y, h, c)
 }
 
-// fontFor returns the bitmap font map for a logical size (12 or 16).
+// fontFor returns the bitmap font map for a logical size (10/12/16/20).
 func fontFor(size int) map[rune]Glyph {
-	if size >= 16 {
+	switch {
+	case size >= 20:
+		return font20
+	case size >= 16:
 		return font16
+	case size >= 12:
+		return font12
+	default:
+		return font10
 	}
-	return font12
 }
 
 func glyphAdvance(size int) int {
@@ -119,11 +125,12 @@ func (im *Image) Text(x, y int, s string, c uint16, size int) int {
 		if !ok {
 			continue
 		}
+		yy := y + int(g.Off)
 		for row := 0; row < int(g.H); row++ {
 			bits := g.Rows[row]
 			for col := 0; col < int(g.W); col++ {
 				if bits&(1<<(int(g.W)-1-col)) != 0 {
-					im.Set(cx+col, y+row, c)
+					im.Set(cx+col, yy+row, c)
 				}
 			}
 		}

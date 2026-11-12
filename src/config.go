@@ -25,6 +25,7 @@ type Config struct {
 	DimBatterySec int            `json:"dim_battery_sec"` // screen-off timeout on battery
 	DimChargerSec int            `json:"dim_charger_sec"` // screen-off timeout while charging
 	Movement      bool           `json:"movement"`        // movement wake enabled
+	MonthlyLimitGB int           `json:"monthly_limit_gb"` // 5G monthly traffic cap (GB)
 }
 
 func defaultConfig() *Config {
@@ -38,6 +39,7 @@ func defaultConfig() *Config {
 		DimBatterySec: 60,
 		DimChargerSec: 300,
 		Movement:      true,
+		MonthlyLimitGB: 9999,
 	}
 }
 
@@ -96,6 +98,10 @@ func LoadConfig() *Config {
 			}
 		case "movement":
 			c.Movement = val == "1" || val == "true" || val == "on"
+		case "monthly_limit_gb":
+			if v, err := strconv.Atoi(val); err == nil && v >= 1 && v <= 9999 {
+				c.MonthlyLimitGB = v
+			}
 		}
 	}
 	return c
@@ -136,6 +142,7 @@ func (c *Config) Save() error {
 	} else {
 		b.WriteString("\toption movement '0'\n")
 	}
+	fmt.Fprintf(&b, "\toption monthly_limit_gb '%d'\n", c.MonthlyLimitGB)
 
 	tmp := configPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(b.String()), 0644); err != nil {

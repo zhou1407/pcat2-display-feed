@@ -51,7 +51,8 @@ type Display struct {
 	fb []byte // PanelW*PanelH*2 big-endian RGB565
 	last *Image // last frame pushed, for dirty-band diffing
 
-	mu sync.Mutex
+	mu   sync.Mutex
+	blMu sync.Mutex
 }
 
 func ioctl(fd uintptr, req uintptr, arg unsafe.Pointer) error {
@@ -273,12 +274,26 @@ func (d *Display) initPanel() error {
 	return nil
 }
 
+// backlightOffLevel is written instead of 0 when turning the backlight off.
+//
+// Writing 0 makes pwm_bl disable the PWM channel (the DTB declares a
+// power-supply, so pwm_backlight_power_off() is used and
+// state.enabled = !power_supply && !enable_gpio -> false). The Rockchip PWM
+// then leaves its output at an undefined level and, with the inverted
+// polarity of this panel, occasionally drives the backlight to full
+// brightness instead of off. The glitch is rare but was observed on real
+// hardware at the moment of the auto-dim. Level 1 keeps the PWM enabled with
+// a ~10 ns on-pulse per 25 us period (visually off, measured current within
+// noise of level 0), so the output level is deterministic.
+const backlightOffLevel = 1
+
 // SetBrightnessPct sets the backlight percentage (0=off, 100=brightest).
 //
-// Hardware-verified polarity: brightness 0 disables the PWM (screen off) and
-// max_brightness (1666) is the brightest level; the kernel's built-in level
-// table is already CIE1931-corrected (pwm_bl default table), so a plain linear
-// percentage -> level mapping gives perceptually linear brightness.
+// Hardware-verified polarity: max_brightness (1666) is the brightest level and
+// the kernel's built-in level table is already CIE1931-corrected (pwm_bl
+// default table), so a plain linear percentage -> level mapping gives
+// perceptually linear brightness. pct 0 writes backlightOffLevel instead of 0
+// to avoid the pwm_bl PWM-disable glitch (see backlightOffLevel).
 func (d *Display) SetBrightnessPct(pct int) error {
 	if pct < 0 {
 		pct = 0
@@ -287,9 +302,23 @@ func (d *Display) SetBrightnessPct(pct int) error {
 		pct = 100
 	}
 	val := d.blMax * pct / 100
-	if err := os.WriteFile(backlightDir+"/brightness", []byte(strconv.Itoa(val)), 0); err != nil {
-		return fmt.Errorf("backlight: %w", err)
+	if val < backlightOffLevel {
+		val = backlightOffLevel
 	}
+	d.blMu.Lock()
+	defer d.blMu.Unlock()
+	name := backlightDir + "/brightness"
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := os.WriteFile(name, []byte(strconv.Itoa(val)), 0); err != nil {
+			log.Printf("display: backlight write %d (pct %d) failed: %v", val, pct, err)
+			return fmt.Errorf("backlight: %w", err)
+		}
+		if b, err := os.ReadFile(name); err == nil && strings.TrimSpace(string(b)) == strconv.Itoa(val) {
+			break
+		}
+		log.Printf("display: backlight write %d (pct %d) readback mismatch, retrying", val, pct)
+	}
+	log.Printf("display: backlight pct=%d level=%d", pct, val)
 	d.blPct = pct
 	return nil
 }

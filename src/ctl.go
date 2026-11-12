@@ -25,6 +25,7 @@ type ctlResponse struct {
 type statusOut struct {
 	Awake         bool   `json:"awake"`
 	Page          int    `json:"page"`
+	Subpage       int    `json:"subpage"`
 	Pages         int    `json:"pages"`
 	Brightness    int    `json:"brightness"`
 	KeyPresses    int    `json:"key_presses"`
@@ -55,6 +56,9 @@ type statusOut struct {
 	DimBatterySec     int    `json:"dim_battery_sec"`
 	DimChargerSec     int    `json:"dim_charger_sec"`
 	Movement          bool   `json:"movement"`
+	MonthlyLimitGB    int    `json:"monthly_limit_gb"`
+	UsedDayMB         int    `json:"used_day_mb"`
+	UsedMonthMB       int    `json:"used_month_mb"`
 	MCUErr            string `json:"mcu_err,omitempty"`
 }
 
@@ -64,7 +68,7 @@ commands:
   screen on|off
   brightness 0..100
   next
-  page 0..2
+  page 0..3
   reload
   set '<json>'   (fan_mode, fan_level, charge_limit, led_*, beeper_*,
                   brightness, dim_battery_sec, dim_charger_sec, movement)`
