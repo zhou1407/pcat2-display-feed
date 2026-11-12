@@ -1,0 +1,48 @@
+name: build-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: src/go.mod
+
+      - name: Build pcat2d (linux/arm64, static)
+        working-directory: src
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags "-s -w" -o ../pcat2d .
+
+      - name: Package tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF_NAME" ]; then VERSION="0.1.0"; fi
+          mkdir -p "pcat2d-${VERSION}"
+          cp pcat2d "pcat2d-${VERSION}/pcat2d"
+          tar czf "pcat2d-${VERSION}-aarch64.tar.gz" "pcat2d-${VERSION}"
+          sha256sum "pcat2d-${VERSION}-aarch64.tar.gz" pcat2d > SHA256SUMS.txt
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          cat SHA256SUMS.txt
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pcat2d-*-aarch64.tar.gz
+            SHA256SUMS.txt
+          fail_on_unmatched_files: true

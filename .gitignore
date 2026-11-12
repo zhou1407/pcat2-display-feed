@@ -1,0 +1,9 @@
+# binaries and build outputs
+pcat2d
+pcat2d-*.tar.gz
+*.apk
+*.ipk
+
+# editor / OS noise
+.DS_Store
+*.swp
