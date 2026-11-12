@@ -1,5 +1,5 @@
 # binaries and build outputs
-pcat2d
+/pcat2d
 pcat2d-*.tar.gz
 *.apk
 *.ipk

@@ -1,0 +1,13 @@
+{
+	"admin/services/pcat2d": {
+		"title": "Photonicat2 控制页",
+		"order": 90,
+		"action": {
+			"type": "view",
+			"path": "pcat2d/control"
+		},
+		"depends": {
+			"acl": [ "luci-app-pcat2d" ]
+		}
+	}
+}

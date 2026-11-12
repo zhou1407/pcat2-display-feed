@@ -1,0 +1,17 @@
+{
+	"luci-app-pcat2d": {
+		"description": "Photonicat2 control page",
+		"read": {
+			"ubus": {
+				"pcat2d": [ "status" ]
+			},
+			"uci": [ "pcat2d" ]
+		},
+		"write": {
+			"ubus": {
+				"pcat2d": [ "set" ]
+			},
+			"uci": [ "pcat2d" ]
+		}
+	}
+}

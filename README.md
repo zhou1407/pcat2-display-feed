@@ -49,7 +49,7 @@ make menuconfig   # Utilities -> pcat2d
 make package/pcat2d/compile V=s
 ```
 
-注意：`package/pcat2d/Makefile` 默认从 GitHub Release 下载预编译的 aarch64 二进制。请把 `PCAT2D_GH_USER` 改成实际 GitHub 用户名，或把 release 的 `pcat2d-<version>-aarch64.tar.gz` 放到 `dl/` 并把 `PKG_HASH` 设为对应 sha256（本地测试可用 `skip`）。
+注意：`package/pcat2d/Makefile` 默认从 GitHub Release 下载预编译的 aarch64 二进制。发布仓库为 `zhou1407/pcat2-display-feed`，`PCAT2D_GH_USER` 已设为 `zhou1407`，或把 release 的 `pcat2d-<version>-aarch64.tar.gz` 放到 `dl/` 并把 `PKG_HASH` 设为对应 sha256（本地测试可用 `skip`）。
 
 ### 方式二：在设备上直接安装
 
@@ -104,7 +104,7 @@ cd src
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o pcat2d .
 ```
 
-GitHub Actions（`.github/workflows/build.yml`）在打 tag（`v*`）时自动交叉编译并发布 Release 资产 `pcat2d-<version>-aarch64.tar.gz`；把该文件的 sha256 填回 `package/pcat2d/Makefile` 的 `PKG_HASH` 即可供 feed 用户直接构建。
+GitHub Actions（`.github/workflows/build.yml`）在打 tag（`v*`）时自动交叉编译并发布 Release 资产 `pcat2d-<version>-aarch64.tar.gz`；当前 `PKG_HASH` 已固定为 v0.1.0 release tarball 的 sha256，feed 用户可直接构建。
 
 ## 目录结构
 

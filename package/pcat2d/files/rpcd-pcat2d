@@ -1,0 +1,27 @@
+#!/bin/sh
+# rpcd exec bridge: exposes the pcat2d control socket as ubus object "pcat2d".
+# rpcd protocol: "list" -> method table, "call <method>" + JSON stdin -> result.
+BIN=/usr/bin/pcat2d
+SOCK=/var/run/pcat2d.sock
+case "$1" in
+	list)
+		printf '{"status":{},"set":{}}\n'
+		;;
+	call)
+		case "$2" in
+			status)
+				exec "$BIN" ctl -s "$SOCK" status
+				;;
+			set)
+				in=$(cat)
+				exec "$BIN" ctl -s "$SOCK" set "$in"
+				;;
+			*)
+				printf '{"ok":false,"err":"unknown method"}\n'
+				;;
+		esac
+		;;
+	*)
+		printf '{"ok":false,"err":"unsupported"}\n'
+		;;
+esac
