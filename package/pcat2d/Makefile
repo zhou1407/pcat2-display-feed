@@ -23,7 +23,7 @@ PKG_SOURCE_URL:=https://github.com/$(PCAT2D_GH_USER)/pcat2-display-feed/releases
 # Filled by .github/workflows/build.yml after the release artifact is built.
 # During local development the release tarball can be placed manually in
 # $(TOPDIR)/dl/ and PKG_HASH can be set to "skip".
-PKG_HASH:=skip
+PKG_HASH:=7794522ee83e0dfad39cc833f0384fcce8377d5fe20832b0b5b731d8565120e3
 
 include $(INCLUDE_DIR)/package.mk
 
