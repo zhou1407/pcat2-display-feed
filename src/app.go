@@ -61,6 +61,9 @@ type App struct {
 	modemRAT    string
 	modemRxBps  float64
 	modemTxBps  float64
+	modemSignal int
+
+	modem modemState
 
 	stop chan struct{}
 }
@@ -104,12 +107,14 @@ func (a *App) Run() error {
 	}
 	a.info = a.sensor.Sample()
 	a.redraw()
+	go a.fanLoop()
 
 	go a.serveSocket()
 	if a.keys != nil {
 		go a.keyLoop()
 	}
 	go a.movementLoop()
+	go a.modemLoop()
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -134,10 +139,7 @@ func (a *App) applyDeviceConfigOnStart() {
 	}
 	var errs []string
 	if !a.noApply {
-		if err := a.dev.ApplyFan(a.cfg.FanMode, a.cfg.FanLevel); err != nil {
-			log.Printf("pcat2d: apply fan: %v", err)
-			errs = append(errs, "fan: "+err.Error())
-		}
+		a.applyFanControl()
 	}
 	if v, err := a.dev.ReadChargeLimit(); err != nil {
 		log.Printf("pcat2d: read charge limit: %v", err)
@@ -159,12 +161,109 @@ func (a *App) applyDeviceConfigOnStart() {
 	}
 }
 
+// fanLoop periodically applies the fan policy (official pcat-manager-web
+// does this from its timer thread: first run after startup, then every 60s).
+func (a *App) fanLoop() {
+	a.applyFanControl()
+	t := time.NewTicker(60 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			a.applyFanControl()
+		case <-a.stop:
+			return
+		}
+	}
+}
+
+// applyFanControl maps the current config + sensor state to a cooling level.
+// manual: fixed level; smart_cool/smart_quiet: host-side curve identical to the
+// official firmware (charging gate = voltage>3V && current>-0.1A && SOC<95%).
+func (a *App) applyFanControl() {
+	if a.noApply {
+		return
+	}
+	a.mu.Lock()
+	mode := a.cfg.FanMode
+	level := a.cfg.FanLevel
+	temp := a.info.BoardTempC
+	charger := a.info.ChargerOnline
+	a.mu.Unlock()
+
+	speed := 0
+	if mode == "manual" {
+		speed = level
+		if speed < 1 {
+			speed = 1
+		}
+		if speed > 9 {
+			speed = 9
+		}
+	} else {
+		speed = smartFanSpeed(mode, temp, charger, level)
+	}
+	if err := a.dev.SetFanCooling(speed); err != nil {
+		log.Printf("pcat2d: fan cooling %d: %v", speed, err)
+		return
+	}
+	a.mu.Lock()
+	prev := a.fanCooling
+	a.fanCooling = speed
+	a.mu.Unlock()
+	if prev != speed {
+		log.Printf("pcat2d: fan cooling=%d (mode=%s temp=%d charger=%v)", speed, mode, temp, charger)
+	}
+}
+
+// smartFanSpeed mirrors the official pcat-manager-web set_fan_speed_smart().
+func smartFanSpeed(mode string, tempC int, charging bool, userMax int) int {
+	startCharging, startDischarging := 45, 52
+	if mode == "smart_cool" {
+		startCharging, startDischarging = 43, 48
+	}
+	if userMax < 1 {
+		userMax = 1
+	}
+	if userMax > 9 {
+		userMax = 9
+	}
+	if tempC <= 0 {
+		return 0
+	}
+	if tempC > 60 {
+		return 8
+	}
+	speed := 0
+	if charging {
+		if tempC >= startCharging {
+			speed = tempC - startCharging + 1
+		}
+	} else if tempC >= startDischarging {
+		speed = tempC - startDischarging + 1
+	}
+	if speed > userMax {
+		speed = userMax
+	}
+	if speed > 9 {
+		speed = 9
+	}
+	if speed < 0 {
+		speed = 0
+	}
+	return speed
+}
+
+// isDeviceCharging mirrors the official is_device_charging() heuristic.
+func isDeviceCharging(battMV, battMA, battPct int) bool {
+	return battMV > 3000 && battMA > -100 && battPct < 95
+}
+
 func (a *App) tick() {
 	info := a.sensor.Sample()
 
 	// History / usage / device data (kept fresh even while the screen is off).
-	if iface := cellularIface(); iface != "" {
-		rx, tx := readIfaceCounters(iface)
+	if rx, tx, ok := cellularCounters(); ok {
 		a.usage.Update(time.Now(), rx, tx)
 	}
 	pw := info.PowerW
@@ -322,6 +421,16 @@ func (a *App) status() statusOut {
 	awake, page, brightness := a.awake, a.page, a.brightness
 	keyPresses, mcuErr, chargeActual, fanCooling := a.keyPresses, a.mcuErr, a.chargeActual, a.fanCooling
 	subpage := a.subpage
+	modemOnline := a.modemOnline
+	modemRAT := a.modemRAT
+	modemCarrier := a.modemCarrier
+	modemModule := a.modemModule
+	modemIP := a.modemIP
+	modemDNSms := a.modemDNSms
+	modemSignal := a.modemSignal
+	modemRxBps := a.modemRxBps
+	modemTxBps := a.modemTxBps
+	devices := a.devices
 	a.mu.Unlock()
 	usedDay := int(a.usage.DayBytes() / 1000000)
 	usedMonth := int(a.usage.MonthBytes() / 1000000)
@@ -364,7 +473,28 @@ func (a *App) status() statusOut {
 		MonthlyLimitGB: cfg.MonthlyLimitGB,
 		UsedDayMB:     usedDay,
 		UsedMonthMB:   usedMonth,
+
+		ModemOnline:  modemOnline,
+		ModemRAT:     modemRAT,
+		ModemCarrier: modemCarrier,
+		ModemModule:  modemModule,
+		ModemIP:      modemIP,
+		ModemDNSms:   modemDNSms,
+		ModemSignal:  modemSignal,
+		ModemRxBps:   modemRxBps,
+		ModemTxBps:   modemTxBps,
+
+		Devices: devicesOut(devices),
 	}
+}
+
+// devicesOut converts the page's device list into the JSON status shape.
+func devicesOut(devs []Device) []deviceOut {
+	out := make([]deviceOut, 0, len(devs))
+	for _, d := range devs {
+		out = append(out, deviceOut{Name: d.Name, IP: d.IP, MAC: d.MAC, WiFi: d.WiFi})
+	}
+	return out
 }
 
 func (a *App) serveSocket() {
@@ -639,13 +769,7 @@ func (a *App) handleSet(raw string) ctlResponse {
 		}
 	}
 	if fanChanged {
-		if err := a.dev.ApplyFan(cfg.FanMode, cfg.FanLevel); err != nil {
-			errs = append(errs, "fan: "+err.Error())
-		} else if cs, err := a.dev.CoolingState(); err == nil {
-			a.mu.Lock()
-			a.fanCooling = cs
-			a.mu.Unlock()
-		}
+		a.applyFanControl()
 	}
 	if outputsChanged {
 		if err := a.dev.ApplyOutputs(cfg.LED, cfg.Beeper); err != nil {

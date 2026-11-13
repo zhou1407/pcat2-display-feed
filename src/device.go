@@ -297,6 +297,11 @@ func (d *DevCtl) CoolingState() (int, error) {
 	return strconv.Atoi(readFileTrim(d.coolingPath + "/cur_state"))
 }
 
+// SetFanCooling writes the pcat-pm-fan thermal cooling level (0..9).
+func (d *DevCtl) SetFanCooling(level int) error {
+	return d.setCooling(level)
+}
+
 func (d *DevCtl) setCooling(level int) error {
 	if d.coolingPath == "" {
 		return errors.New("pcat-pm-fan cooling device not found")

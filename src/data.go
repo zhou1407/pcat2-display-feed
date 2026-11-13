@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type SysInfo struct {
 	BatteryMA     int
 	BatteryStatus string
 	ChargerOnline bool
+	Charging      bool // official semantics: charger inserted and not net-discharging
 	ChargerMV     int
 
 	BoardTempC int
@@ -45,8 +47,10 @@ type SysInfo struct {
 	WANUp     bool    // WAN link up
 	WANHasIP  bool    // WAN has a default route
 	LANUp     bool
-	WifiBoard int // board WiFi station count (0 when no radio)
-	WifiPcie  int // PCIe WiFi station count
+	WifiBoard   int  // board WiFi station count (0 when no radio)
+	WifiPcie    int  // PCIe WiFi station count
+	WifiBoardUp bool // board WiFi radio enabled / AP interface up
+	WifiPcieUp  bool // PCIe WiFi radio enabled / AP interface up
 	SN        string
 }
 
@@ -228,11 +232,33 @@ func cellularIface() string {
 	}
 	for _, e := range entries {
 		n := e.Name()
-		if strings.HasPrefix(n, "wwan") || strings.HasPrefix(n, "qmi") || strings.HasPrefix(n, "rmnet") {
+		if isCellularIface(n) {
 			return n
 		}
 	}
 	return ""
+}
+
+func isCellularIface(n string) bool {
+	return strings.HasPrefix(n, "wwan") || strings.HasPrefix(n, "qmi") || strings.HasPrefix(n, "rmnet")
+}
+
+// cellularCounters sums rx/tx over every cellular interface. qmodem creates a
+// raw wwan0 plus a dialed wwan0_1 child; summing both is safe (the raw one
+// normally stays at zero) and avoids picking the wrong one.
+func cellularCounters() (uint64, uint64, bool) {
+	m := readNetDev()
+	var rx, tx uint64
+	found := false
+	for n, c := range m {
+		if !isCellularIface(n) {
+			continue
+		}
+		found = true
+		rx += c[0]
+		tx += c[1]
+	}
+	return rx, tx, found
 }
 
 func readOSVersion() string {
@@ -258,6 +284,7 @@ func (s *Sensor) Sample() SysInfo {
 	si.BatteryMA = readSysInt("/sys/class/power_supply/battery/current_now") / 1000
 	si.BatteryStatus = readFileTrim("/sys/class/power_supply/battery/status")
 	si.ChargerOnline = readSysInt("/sys/class/power_supply/charger/online") == 1
+	si.Charging = si.ChargerOnline && si.BatteryMA > -50
 	si.ChargerMV = readSysInt("/sys/class/power_supply/charger/voltage_now") / 1000
 
 	if s.tempPath != "" {
@@ -305,7 +332,7 @@ func (s *Sensor) Sample() SysInfo {
 	} else {
 		si.PowerW = float64(si.BatteryMV) * float64(si.BatteryMA) / 1e3
 	}
-	if !si.ChargerOnline && si.PowerW < -0.2 && si.BatteryPct > 0 {
+	if si.PowerW < -0.2 && si.BatteryPct > 0 {
 		const energyFullWh = 51.8
 		si.RemainSec = int64(energyFullWh * float64(si.BatteryPct) / 100.0 / -si.PowerW * 3600)
 	}
@@ -315,9 +342,16 @@ func (s *Sensor) Sample() SysInfo {
 	si.LANUp = readOperstate("br-lan") == "up"
 	si.WANHasIP = defaultRouteVia("eth0")
 
-	// WiFi station counts (empty when the board has no radio/driver).
-	si.WifiBoard = wifiStationCount("wlan0")
-	si.WifiPcie = wifiStationCount("wlan1")
+	// WiFi state: the Photonicat2 has an onboard USB AIC8800 ("usb" bus) and
+	// a PCIe MT7925 ("pci" bus). Interface names differ between firmware
+	// builds (wlan0/wlan1 vs phyN-ap0), so classify by the PHY device path.
+	// Fall back to the legacy wlan0/wlan1 names when no PHY is found.
+	si.WifiBoard, si.WifiBoardUp = wifiBusState("usb")
+	si.WifiPcie, si.WifiPcieUp = wifiBusState("pci")
+	if !si.WifiBoardUp && !si.WifiPcieUp {
+		si.WifiBoard, si.WifiBoardUp = legacyWifiState("wlan0")
+		si.WifiPcie, si.WifiPcieUp = legacyWifiState("wlan1")
+	}
 
 	si.SN = readSN()
 	return si
@@ -339,6 +373,97 @@ func defaultRouteVia(ifname string) bool {
 		}
 	}
 	return false
+}
+
+// wifiBusState returns the station count and enabled state for all wireless
+// interfaces whose PHY sits on the given bus ("usb" = onboard, "pci" = M.2).
+func wifiBusState(bus string) (int, bool) {
+	ents, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return 0, false
+	}
+	stations := 0
+	up := false
+	for _, e := range ents {
+		name := e.Name()
+		link, err := os.Readlink("/sys/class/net/" + name + "/phy80211")
+		if err != nil {
+			continue
+		}
+		phy := filepath.Base(link)
+		real, err := filepath.EvalSymlinks("/sys/class/ieee80211/" + phy)
+		if err != nil {
+			continue
+		}
+		kind := ""
+		switch {
+		case strings.Contains(real, "/usb"):
+			kind = "usb"
+		case strings.Contains(real, "/pci"):
+			kind = "pci"
+		}
+		if kind != bus {
+			continue
+		}
+		if wifiEnabled(name) {
+			up = true
+		}
+		stations += wifiStationCount(name)
+	}
+	return stations, up
+}
+
+// wifiStationMACs maps associated WiFi station MACs to the radio they are
+// connected through: 1 = onboard (USB AIC8800), 2 = PCIe MT7925. Interface
+// names are dynamic (phy0-ap0 / phy1-ap0), so classify by the PHY bus.
+func wifiStationMACs() map[string]int {
+	res := make(map[string]int)
+	ents, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return res
+	}
+	for _, e := range ents {
+		name := e.Name()
+		link, err := os.Readlink("/sys/class/net/" + name + "/phy80211")
+		if err != nil {
+			continue
+		}
+		phy := filepath.Base(link)
+		real, err := filepath.EvalSymlinks("/sys/class/ieee80211/" + phy)
+		if err != nil {
+			continue
+		}
+		radio := 0
+		switch {
+		case strings.Contains(real, "/usb"):
+			radio = 1
+		case strings.Contains(real, "/pci"):
+			radio = 2
+		}
+		if radio == 0 {
+			continue
+		}
+		out, err := exec.Command("iw", "dev", name, "station", "dump").Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			f := strings.Fields(line)
+			if len(f) >= 2 && f[0] == "Station" {
+				res[strings.ToLower(f[1])] = radio
+			}
+		}
+	}
+	return res
+}
+
+// legacyWifiState is the pre-PHY classification fallback used by older
+// firmware images that expose wlan0/wlan1 netdevs.
+func legacyWifiState(name string) (int, bool) {
+	if _, err := os.Stat("/sys/class/net/" + name); err != nil {
+		return 0, false
+	}
+	return wifiStationCount(name), wifiEnabled(name)
 }
 
 // wifiStationCount counts associated stations via `iw` (busybox/system might

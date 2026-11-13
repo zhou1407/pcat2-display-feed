@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 )
@@ -13,23 +12,11 @@ type Device struct {
 	Name string
 	IP   string
 	MAC  string
-	WiFi int // 0 = wired/LAN, 1 = board WiFi (wlan0), 2 = PCIe WiFi (wlan1)
+	WiFi int // 0 = wired/LAN, 1 = onboard WiFi (USB), 2 = PCIe WiFi
 }
 
 func loadDevices() []Device {
-	wifi := map[string]int{"": 0}
-	for i, ifname := range []string{"wlan0", "wlan1"} {
-		out, err := exec.Command("iw", "dev", ifname, "station", "dump").Output()
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(out), "\n") {
-			f := strings.Fields(line)
-			if len(f) >= 2 && f[0] == "Station" {
-				wifi[strings.ToLower(f[1])] = i + 1
-			}
-		}
-	}
+	wifi := wifiStationMACs()
 
 	var devs []Device
 	b, err := os.ReadFile("/tmp/dhcp.leases")
@@ -48,9 +35,7 @@ func loadDevices() []Device {
 			host = "dev-" + mac[len(mac)-5:]
 		}
 		d := Device{Name: host, IP: ip, MAC: mac}
-		if d.WiFi = wifi[mac]; d.WiFi == 0 {
-			d.WiFi = 0
-		}
+		d.WiFi = wifi[mac]
 		devs = append(devs, d)
 	}
 	sort.Slice(devs, func(i, j int) bool {

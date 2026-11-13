@@ -21,6 +21,14 @@ type ctlResponse struct {
 	Status *statusOut `json:"status,omitempty"`
 }
 
+// deviceOut is one connected-device row for the status/CLI output.
+type deviceOut struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+	MAC  string `json:"mac"`
+	WiFi int    `json:"wifi"`
+}
+
 // statusOut is the full daemon status, also used by the LuCI page via rpcd.
 type statusOut struct {
 	Awake         bool   `json:"awake"`
@@ -60,6 +68,18 @@ type statusOut struct {
 	UsedDayMB         int    `json:"used_day_mb"`
 	UsedMonthMB       int    `json:"used_month_mb"`
 	MCUErr            string `json:"mcu_err,omitempty"`
+
+	ModemOnline  bool    `json:"modem_online"`
+	ModemRAT     string  `json:"modem_rat"`
+	ModemCarrier string  `json:"modem_carrier"`
+	ModemModule  string  `json:"modem_module"`
+	ModemIP      string  `json:"modem_ip"`
+	ModemDNSms   int     `json:"modem_dns_ms"`
+	ModemSignal  int     `json:"modem_signal"`
+	ModemRxBps   float64 `json:"modem_rx_bps"`
+	ModemTxBps   float64 `json:"modem_tx_bps"`
+
+	Devices []deviceOut `json:"devices"`
 }
 
 const usage = `usage: pcat2d ctl [-s socket] <command> [arg]

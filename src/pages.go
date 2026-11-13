@@ -12,9 +12,9 @@ import (
 const pageCount = 4
 
 func (a *App) barState(s SysInfo) barState {
-	signalBars := 0
-	if a.modemOnline {
-		signalBars = 4
+	signalBars := a.modemSignal
+	if a.modemOnline && signalBars < 1 {
+		signalBars = 1
 	}
 	return barState{
 		FiveG:      a.modemOnline,
@@ -22,8 +22,8 @@ func (a *App) barState(s SysInfo) barState {
 		WANLinked:  s.WANUp,
 		WANIP:      s.WANHasIP,
 		LANLinked:  s.LANUp,
-		BoardWiFi:  wifiEnabled("wlan0"),
-		PcieWiFi:   wifiEnabled("wlan1"),
+		BoardWiFi:  s.WifiBoardUp,
+		PcieWiFi:   s.WifiPcieUp,
 		BoardCount: s.WifiBoard,
 		PcieCount:  s.WifiPcie,
 		RAT:        a.modemRAT,
@@ -78,6 +78,20 @@ func (a *App) renderBattery(im *Image, s SysInfo) {
 		im.RText(W-4, 27, fmt.Sprintf("%d%%", s.BatteryPct), batteryColor(s.BatteryPct), 20)
 	}
 
+	// power state tag: charging / power-bank output / discharging
+	stateTag, stateCol := "", ColorGray
+	switch {
+	case s.Charging:
+		stateTag, stateCol = "充电中", ColorGreen
+	case s.ChargerOnline && s.PowerW < -0.2:
+		stateTag, stateCol = "对外供电", ColorOrange
+	case s.PowerW < -0.2:
+		stateTag, stateCol = "放电中", ColorGray
+	}
+	if stateTag != "" {
+		im.Text(44, 33, stateTag, stateCol, 10)
+	}
+
 	// battery bar
 	im.Rect(4, 52, W-8, 14, ColorDarker)
 	fill := int(float64(W-10) * float64(clampi(s.BatteryPct, 0, 100)) / 100.0)
@@ -87,16 +101,16 @@ func (a *App) renderBattery(im *Image, s SysInfo) {
 	im.Border(4, 52, W-8, 14, ColorDark)
 
 	// power panel (60s curve, style B)
-	drawPowerPanel(im, 4, 70, W-8, 65, a.powerSeries(), s.ChargerOnline)
+	drawPowerPanel(im, 4, 70, W-8, 65, a.powerSeries(), s.PowerW > 0.2, s.PowerW)
 
 	im.Text(4, 138, "电压", ColorGray, 10)
 	im.Text(4, 148, fmt.Sprintf("%.2f V", float64(s.BatteryMV)/1000.0), ColorWhite, 16)
 	im.RText(W-4, 138, "剩余", ColorGray, 10)
 	rem := "--"
-	if s.ChargerOnline {
-		rem = "充电中"
-	} else if s.RemainSec > 0 {
+	if s.RemainSec > 0 {
 		rem = fmtDur(s.RemainSec)
+	} else if s.Charging {
+		rem = "充电中"
 	}
 	im.RText(W-4, 148, rem, ColorWhite, 16)
 
@@ -133,7 +147,7 @@ func (a *App) wanSeries() [30]uint64 {
 
 // drawPowerPanel renders the 60s power curve: bottom 0W, top 40W, grid lines at
 // 10/20/30W. Style B colours: discharge = yellow bg + green curve, charge swaps.
-func drawPowerPanel(im *Image, x, y, w, h int, hist [60]float64, charging bool) {
+func drawPowerPanel(im *Image, x, y, w, h int, hist [60]float64, charging bool, curSigned float64) {
 	bg := rgb565(255, 230, 140)
 	curve := rgb565(20, 125, 60)
 	if charging {
@@ -177,7 +191,16 @@ func drawPowerPanel(im *Image, x, y, w, h int, hist [60]float64, charging bool) 
 	}
 	dark := colorLerp(bg, ColorBlack, 0.62)
 	im.Text(x+3, y+2, "功率 60s", dark, 10)
-	im.RText(x+w-3, y+2, fmt.Sprintf("%.1f W", math.Abs(hist[59])), dark, 10)
+	var curTxt string
+	switch {
+	case curSigned > 0.05:
+		curTxt = fmt.Sprintf("+%.1f W", curSigned)
+	case curSigned < -0.05:
+		curTxt = fmt.Sprintf("%.1f W", curSigned)
+	default:
+		curTxt = "0.0 W"
+	}
+	im.RText(x+w-3, y+2, curTxt, dark, 10)
 	_ = dark
 }
 

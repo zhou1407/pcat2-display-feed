@@ -35,7 +35,17 @@ func TestRenderPages(t *testing.T) {
 	chg.ChargerMV = 12100
 	chg.BatteryPct = 64
 	chg.BatteryMA = 900
+	chg.Charging = true
+	chg.PowerW = 12.4
 	save("page0_battery_charging.png", a.renderPageIdx(0, chg))
+	pb := s
+	pb.ChargerOnline = true
+	pb.ChargerMV = 9497
+	pb.BatteryPct = 100
+	pb.BatteryMA = -2974
+	pb.PowerW = -23.6
+	pb.RemainSec = 6540
+	save("page0_battery_powerbank.png", a.renderPageIdx(0, pb))
 	save("page1_5g.png", a.renderPageIdx(1, s))
 	save("page2_system.png", a.renderPageIdx(2, s))
 	save("page3_devices.png", a.renderPageIdx(3, s))
@@ -74,10 +84,12 @@ func previewApp() *App {
 		{Name: "iPad-Air", IP: "192.168.2.151", WiFi: 1},
 	}
 	a.modemOnline = true
-	a.modemModule = "RM520N-GL"
-	a.modemCarrier = "中国移动 CMCC"
-	a.modemIP = "10.1.2.3"
-	a.modemDNSms = 23
+	a.modemModule = "RM500Q-CN"
+	a.modemCarrier = "中国联通"
+	a.modemIP = "10.146.26.67"
+	a.modemDNSms = 204
+	a.modemRAT = "5G"
+	a.modemSignal = 4
 	a.modemRxBps = 10600000
 	a.modemTxBps = 1550000
 	return a
@@ -98,7 +110,7 @@ func previewInfo() SysInfo {
 		Kernel:         "6.18.55",
 		SN:             "0x1234ABCD",
 		RemainSec:      9300,
-		PowerW:         3.2,
+		PowerW:         -3.2,
 		LANRxBps:       420000,
 		LANTxBps:       180000,
 		WANRxBps:       420000,
@@ -107,7 +119,9 @@ func previewInfo() SysInfo {
 		WANHasIP:       true,
 		LANUp:          true,
 		WifiBoard:      3,
+		WifiBoardUp:    true,
 		WifiPcie:       0,
+		WifiPcieUp:     true,
 	}
 }
 

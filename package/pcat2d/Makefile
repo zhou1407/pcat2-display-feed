@@ -9,7 +9,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=pcat2d
-PKG_VERSION:=0.2.0
+PKG_VERSION:=0.3.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=GPL-3.0-only
@@ -23,7 +23,7 @@ PKG_SOURCE_URL:=https://github.com/$(PCAT2D_GH_USER)/pcat2-display-feed/releases
 # Filled by .github/workflows/build.yml after the release artifact is built.
 # During local development the release tarball can be placed manually in
 # $(TOPDIR)/dl/ and PKG_HASH can be set to "skip".
-PKG_HASH:=9219b7ceb0d12f441bbfd6e52466bcb2b682c612c4ce78cde3cd9f40262a0ea7
+PKG_HASH:=skip
 
 include $(INCLUDE_DIR)/package.mk
 
